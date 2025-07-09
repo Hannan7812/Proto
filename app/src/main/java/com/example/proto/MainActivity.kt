@@ -1,70 +1,117 @@
+// MainActivity.kt
 package com.example.proto
 
-import android.content.Context
+import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import com.example.proto.ui.theme.ProtoTheme
+import androidx.compose.ui.unit.dp
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
-import java.io.IOException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import androidx.compose.ui.Alignment
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val exists = isModelFileAvailable(this)
-        var name = ""
-        if (exists){
-            name = "Yay"
+        val root = getExternalFilesDir(null)
+
+        val modelFile = File(root, "gemma-3n-E4B-it-int4.task")
+
+        if (!modelFile.exists()) {
+            val intent = Intent(this, SecondaryActivity::class.java)
+            startActivity(intent)
         }
-        else{
-            name = "Nay"
-        }
-        enableEdgeToEdge()
+
+        Log.i("Model Exists", "Model exists at ${modelFile.absolutePath} an its ${modelFile.canRead()} and its size is ${modelFile.length()}")
+        val taskOptions = LlmInference.LlmInferenceOptions.builder()
+            .setModelPath(modelFile.absolutePath)
+            .setMaxTopK(64)
+            .build()
+
+        val llmInference = LlmInference.createFromOptions(this, taskOptions)
         setContent {
-            ProtoTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = name,
-                        modifier = Modifier.padding(innerPadding)
+            ChatScreen(llmInference)
+        }
+    }
+}
+
+@Composable
+fun ChatScreen(llmInference: LlmInference) {
+    var messages by remember { mutableStateOf(listOf("Welcome to Local Chat!")) }
+    var input by remember { mutableStateOf("") }
+    var isLoading by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+
+    Column(modifier = Modifier.padding(16.dp)) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(bottom = 8.dp)
+        ) {
+            messages.forEach {
+                Text(it, modifier = Modifier.padding(4.dp))
+            }
+
+            // ⬇️ Show typing indicator if loading
+            if (isLoading) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .size(16.dp)
+                            .padding(end = 8.dp),
+                        strokeWidth = 2.dp
                     )
+                    Text("Bot is typing...")
                 }
+            }
+        }
+
+        Row(modifier = Modifier.fillMaxWidth()) {
+            TextField(
+                value = input,
+                onValueChange = { input = it },
+                modifier = Modifier.weight(1f),
+                enabled = !isLoading // disable while waiting
+            )
+            Button(
+                onClick = {
+                    val userMessage = "You: $input"
+                    messages = messages + userMessage
+                    isLoading = true
+
+                    coroutineScope.launch {
+                        val response = try {
+                            withContext(Dispatchers.IO) {
+                                llmInference.generateResponse(input)
+                            }
+                        } catch (e: Exception) {
+                            Log.e("Inference", "Error generating response", e)
+                            "Oops! Something went wrong."
+                        }
+
+                        val botMessage = "Bot: $response"
+                        messages = messages + botMessage
+                        isLoading = false
+                    }
+
+                    input = ""
+                },
+                enabled = input.isNotBlank() && !isLoading // disable if loading or input is empty
+            ) {
+                Text("Send")
             }
         }
     }
 }
 
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
 
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    ProtoTheme {
-        Greeting("Android")
-    }
-}
-fun isModelFileAvailable(context: Context): Boolean {
-    // Set the configuration options for the LLM Inference task
-        val taskOptions = LlmInference.LlmInferenceOptions.builder()
-            .setModelPath("assets/model.task")
-            .setMaxTopK(64)
-            .build()
 
-    // Create an instance of the LLM Inference task
-    var llmInference = LlmInference.createFromOptions(context, taskOptions)
-    var result = llmInference.generateResponse("Hello")
-    return result == null
-}
